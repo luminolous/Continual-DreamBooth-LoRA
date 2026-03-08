@@ -1,0 +1,118 @@
+# =============================================================================
+# Continual DreamBooth-CLoRA — Faithful C-LoRA Experiment Config
+# =============================================================================
+#
+# This config uses the faithful_c_lora method:
+# - Per-task LoRA adapters composed into a shared continual model
+# - Randomly initialized personalized token embeddings
+# - C-LoRA-style prompts (no explicit object/class word)
+# - Occupancy-based regularization from past LoRA factors
+# - Prior preservation (default ON)
+#
+# PRIMARY evaluation: composed model with all adapters active
+# Task identity comes from token embeddings, not adapter selection
+# Forgetting = adapter interference in the composed model
+# =============================================================================
+
+experiment:
+  name: "5char_faithful"
+  seed: 42
+  output_dir: "./outputs"
+  method: "faithful_c_lora"
+
+model:
+  pretrained_model_name: "runwayml/stable-diffusion-v1-5"
+  lora_rank: 4
+  lora_alpha: 4
+  # Cross-attention K/V only (auto-set to attn2.to_k, attn2.to_v for faithful mode)
+  lora_target_modules: ["to_k", "to_v"]
+  enable_xformers_memory_efficient_attention: false
+  mixed_precision: "fp16"
+
+training:
+  learning_rate: 1.0e-4
+  max_train_steps: 400
+  train_batch_size: 1
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: true
+  use_8bit_adam: false
+  seed: 42
+
+tasks:
+  - name: "char_01"
+    trigger_token: "lumy01"
+    instance_prompt: "a photo of lumy01 anime girl"    # used only in dreambooth mode
+    class_prompt: "a photo of anime character"
+    data_dir: "../dataset/char_01/train"
+    ref_dir: "../dataset/char_01/ref"
+
+  - name: "char_02"
+    trigger_token: "lumy02"
+    instance_prompt: "a photo of lumy02 anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../dataset/char_02/train"
+    ref_dir: "../dataset/char_02/ref"
+
+  - name: "char_03"
+    trigger_token: "lumy03"
+    instance_prompt: "a photo of lumy03 anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../dataset/char_03/train"
+    ref_dir: "../dataset/char_03/ref"
+
+  - name: "char_04"
+    trigger_token: "lumy04"
+    instance_prompt: "a photo of lumy04 anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../dataset/char_04/train"
+    ref_dir: "../dataset/char_04/ref"
+
+  - name: "char_05"
+    trigger_token: "lumy05"
+    instance_prompt: "a photo of lumy05 anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../dataset/char_05/train"
+    ref_dir: "../dataset/char_05/ref"
+
+evaluation:
+  num_images_per_prompt: 4
+  guidance_scale: 7.5
+  num_inference_steps: 30
+  image_size: 512
+  compute_confusion_gap: true
+  per_prompt_breakdown: false
+  prompts_per_character:
+    - "{instance_prompt}, portrait, white background"
+    - "{instance_prompt}, upper body, smiling"
+    - "{instance_prompt}, full body, standing"
+    - "{instance_prompt}, close-up face, detailed"
+    - "{instance_prompt}, looking to the side, soft lighting"
+    - "{instance_prompt}, chibi style, cute expression"
+
+c_lora:
+  # Token strategy
+  token_init: "random"                 # randomly initialized personalized tokens
+  train_token_embeddings: true         # train token embedding rows
+
+  # Prompt strategy
+  prompt_mode: "clora"                 # "a photo of <lumy01>" — no class word
+
+  # Adapter strategy
+  adapter_strategy: "per_task"         # per-task adapters composed at inference
+
+  # Regularization
+  regularizer_type: "occupancy"        # occupancy-based interference constraint
+  regularization_weight: 0.1
+
+  # Prior preservation
+  prior_preservation: true
+  prior_loss_weight: 1.0
+  num_class_images: 200
+  class_prompt: "a photo of anime character"
+
+  # Inference (PRIMARY = composed model)
+  inference_adapter_mode: "compose_all"
+
+  # Optional diagnostics
+  run_diagnostic_eval: false           # set true for isolated-adapter debugging
+  run_multi_concept_probe: true        # multi-concept generation (visual only)

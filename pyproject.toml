@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "dreambooth-clora"
+version = "0.1.0"
+description = "Continual DreamBooth-LoRA for Sequential Anime Character Personalization"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "DreamBooth-CLoRA Contributors"},
+]
+keywords = ["diffusion", "lora", "continual-learning", "anime", "dreambooth", "personalization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "diffusers>=0.25.0,<0.31.0",
+    "transformers>=4.36.0",
+    "accelerate>=0.25.0",
+    "peft>=0.7.0",
+    "safetensors>=0.4.0",
+    "sdeval==0.2.4",
+    "Pillow>=10.0.0",
+    "pyyaml>=6.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.7.0",
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+]
+memory = [
+    "bitsandbytes>=0.41.0",
+    "xformers>=0.0.22",
+]
+
+[project.scripts]
+dreambooth-clora = "src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

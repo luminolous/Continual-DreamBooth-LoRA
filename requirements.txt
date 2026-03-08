@@ -1,0 +1,22 @@
+# Core
+torch>=2.0.0
+torchvision>=0.15.0
+diffusers>=0.25.0,<0.31.0
+transformers>=4.36.0
+accelerate>=0.25.0
+peft>=0.7.0
+safetensors>=0.4.0
+
+# Evaluation — pinned for CCIP API stability
+sdeval==0.2.4
+
+# Data & Utilities
+Pillow>=10.0.0
+pyyaml>=6.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+
+# Optional: memory optimization (install manually if needed)
+# bitsandbytes>=0.41.0
+# xformers>=0.0.22
