@@ -1,4 +1,6 @@
-# Continual DreamBooth-CLoRA
+# Coming soon...
+
+<!-- # Continual DreamBooth-CLoRA
 
 > Sequential Anime Character Personalization with Continual Learning
 
@@ -217,4 +219,4 @@ Key pinned versions:
 
 ## License
 
-Research use. See individual library licenses for dependencies.
+Research use. See individual library licenses for dependencies. -->
