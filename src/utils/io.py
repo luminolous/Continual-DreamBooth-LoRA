@@ -65,22 +65,36 @@ def load_lora_weights_into_pipeline(
     lora_dir: str | Path,
     adapter_name: str = "default",
 ) -> None:
-    """Load LoRA weights into a Diffusers pipeline.
-
-    Uses pipeline.load_lora_weights which supports both safetensors and
-    PEFT adapter directories.
-
-    Args:
-        pipeline: A Diffusers StableDiffusionPipeline instance.
-        lora_dir: Directory containing the saved LoRA weights.
-        adapter_name: Name for the LoRA adapter.
-    """
+    from pathlib import Path
     lora_path = Path(lora_dir)
+
     if not lora_path.exists():
         raise FileNotFoundError(f"LoRA weights directory not found: {lora_path}")
 
+    # PEFT adapter directory -> load with PEFT directly
+    if (lora_path / "adapter_config.json").exists():
+        from peft import PeftModel
+
+        pipeline.unet = PeftModel.from_pretrained(
+            pipeline.unet,
+            str(lora_path),
+            adapter_name=adapter_name,
+            is_trainable=False,
+        )
+        try:
+            pipeline.unet.set_adapter(adapter_name)
+        except Exception:
+            pass
+
+        logger.info(
+            "Loaded PEFT LoRA into pipeline UNet from %s (adapter=%s)",
+            lora_path, adapter_name
+        )
+        return
+
+    # Diffusers/Kohya-style LoRA -> load with Diffusers loader
     pipeline.load_lora_weights(str(lora_path), adapter_name=adapter_name)
-    logger.info("Loaded LoRA weights from %s (adapter=%s)", lora_path, adapter_name)
+    logger.info("Loaded Diffusers LoRA weights from %s (adapter=%s)", lora_path, adapter_name)
 
 
 # ---------------------------------------------------------------------------
