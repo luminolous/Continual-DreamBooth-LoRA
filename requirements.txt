@@ -8,7 +8,7 @@ peft>=0.7.0
 safetensors>=0.4.0
 
 # Evaluation — pinned for CCIP API stability
-sdeval==0.2.4
+sdeval
 
 # Data & Utilities
 Pillow>=10.0.0

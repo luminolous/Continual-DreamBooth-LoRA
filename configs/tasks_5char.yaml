@@ -18,11 +18,11 @@
 experiment:
   name: "5char_naive"
   seed: 42
-  output_dir: "./outputs"
+  output_dir: "../outputs/naive-sequential"
   method: "naive_sequential"   # "naive_sequential" | "c_lora_scaffold" | "faithful_c_lora"
 
 model:
-  pretrained_model_name: "runwayml/stable-diffusion-v1-5"
+  pretrained_model_name: "hakurei/waifu-diffusion"
   lora_rank: 4
   lora_alpha: 4
   # For c_lora_scaffold method, only ["to_k", "to_v"] are used by default.
@@ -30,11 +30,11 @@ model:
   lora_target_modules: ["to_k", "to_v"]
   use_xformers: false
   enable_xformers_memory_efficient_attention: false
-  mixed_precision: "fp16"
+  mixed_precision: "bf16"
 
 training:
   learning_rate: 1.0e-4
-  max_train_steps: 400
+  max_train_steps: 80
   train_batch_size: 1
   gradient_accumulation_steps: 1
   gradient_checkpointing: true
@@ -44,40 +44,40 @@ training:
   seed: 42
 
 tasks:
-  - name: "char_01"
-    trigger_token: "lumy01"
-    instance_prompt: "a photo of lumy01 anime girl"
-    class_prompt: "a photo of anime girl"
-    data_dir: "../dataset/char_01/train"
-    ref_dir: "../dataset/char_01/ref"
+  - name: "Miku"
+    trigger_token: "miku"
+    instance_prompt: "a photo of miku anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../nakano-debug/Miku-debug/train"
+    ref_dir: "../nakano-debug/Miku-debug/ref"
 
-  - name: "char_02"
-    trigger_token: "lumy02"
-    instance_prompt: "a photo of lumy02 anime girl"
-    class_prompt: "a photo of anime girl"
-    data_dir: "../dataset/char_02/train"
-    ref_dir: "../dataset/char_02/ref"
+  - name: "Yotsuba"
+    trigger_token: "yotsuba"
+    instance_prompt: "a photo of yotsuba anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../nakano-debug/Yotsuba-debug/train"
+    ref_dir: "../nakano-debug/Yotsuba-debug/ref"
 
-  - name: "char_03"
-    trigger_token: "lumy03"
-    instance_prompt: "a photo of lumy03 anime girl"
-    class_prompt: "a photo of anime girl"
-    data_dir: "../dataset/char_03/train"
-    ref_dir: "../dataset/char_03/ref"
+  - name: "Nino"
+    trigger_token: "nino"
+    instance_prompt: "a photo of nino anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../nakano-debug/Nino-debug/train"
+    ref_dir: "../nakano-debug/Nino-debug/ref"
 
-  - name: "char_04"
-    trigger_token: "lumy04"
-    instance_prompt: "a photo of lumy04 anime girl"
-    class_prompt: "a photo of anime girl"
-    data_dir: "../dataset/char_04/train"
-    ref_dir: "../dataset/char_04/ref"
+  # - name: "char_04"
+  #   trigger_token: "lumy04"
+  #   instance_prompt: "a photo of lumy04 anime girl"
+  #   class_prompt: "a photo of anime character"
+  #   data_dir: "../dataset/char_04/train"
+  #   ref_dir: "../dataset/char_04/ref"
 
-  - name: "char_05"
-    trigger_token: "lumy05"
-    instance_prompt: "a photo of lumy05 anime girl"
-    class_prompt: "a photo of anime girl"
-    data_dir: "../dataset/char_05/train"
-    ref_dir: "../dataset/char_05/ref"
+  # - name: "char_05"
+  #   trigger_token: "lumy05"
+  #   instance_prompt: "a photo of lumy05 anime girl"
+  #   class_prompt: "a photo of anime character"
+  #   data_dir: "../dataset/char_05/train"
+  #   ref_dir: "../dataset/char_05/ref"
 
 evaluation:
   num_images_per_prompt: 4
