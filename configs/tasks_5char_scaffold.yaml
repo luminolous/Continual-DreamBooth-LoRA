@@ -1,0 +1,104 @@
+# =============================================================================
+# Continual DreamBooth-CLoRA — Default 5-Character Experiment Config
+# =============================================================================
+#
+# PROMPT DESIGN NOTE:
+#   Phase 1 uses DreamBooth-style instance prompts with fixed trigger tokens
+#   (e.g., "a photo of lumy01 anime girl"). This differs from the original
+#   C-LoRA paper, which uses randomly initialized embeddings and avoids
+#   including the actual object name in the prompt. This is a deliberate
+#   simplification for Phase 1.
+#
+# METHOD NOTE:
+#   "c_lora_scaffold" is a C-LoRA-inspired regularization scaffold, NOT a
+#   faithful reproduction of the C-LoRA paper. Phase 2 adds importance-weighted
+#   regularization (magnitude or Fisher-based) as a closer approximation.
+# =============================================================================
+
+experiment:
+  name: "5char_naive"
+  seed: 42
+  output_dir: "../outputs/naive-sequential"
+  method: "c_lora_scaffold"   # "naive_sequential" | "c_lora_scaffold" | "faithful_c_lora"
+
+model:
+  pretrained_model_name: "hakurei/waifu-diffusion"
+  lora_rank: 4
+  lora_alpha: 4
+  # For c_lora_scaffold method, only ["to_k", "to_v"] are used by default.
+  # Naive baseline may use broader targets like ["to_k", "to_v", "to_q", "to_out.0"].
+  lora_target_modules: ["to_k", "to_v"]
+  use_xformers: false
+  enable_xformers_memory_efficient_attention: false
+  mixed_precision: "bf16"
+
+training:
+  learning_rate: 1.0e-4
+  max_train_steps: 80
+  train_batch_size: 1
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: true
+  use_8bit_adam: false
+  pre_compute_text_embeddings: false
+  prior_preservation: false
+  seed: 42
+
+tasks:
+  - name: "Miku"
+    trigger_token: "miku"
+    instance_prompt: "a photo of miku anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../nakano-debug/Miku-debug/train"
+    ref_dir: "../nakano-debug/Miku-debug/ref"
+
+  - name: "Yotsuba"
+    trigger_token: "yotsuba"
+    instance_prompt: "a photo of yotsuba anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../nakano-debug/Yotsuba-debug/train"
+    ref_dir: "../nakano-debug/Yotsuba-debug/ref"
+
+  - name: "Nino"
+    trigger_token: "nino"
+    instance_prompt: "a photo of nino anime girl"
+    class_prompt: "a photo of anime character"
+    data_dir: "../nakano-debug/Nino-debug/train"
+    ref_dir: "../nakano-debug/Nino-debug/ref"
+
+  # - name: "char_04"
+  #   trigger_token: "lumy04"
+  #   instance_prompt: "a photo of lumy04 anime girl"
+  #   class_prompt: "a photo of anime character"
+  #   data_dir: "../dataset/char_04/train"
+  #   ref_dir: "../dataset/char_04/ref"
+
+  # - name: "char_05"
+  #   trigger_token: "lumy05"
+  #   instance_prompt: "a photo of lumy05 anime girl"
+  #   class_prompt: "a photo of anime character"
+  #   data_dir: "../dataset/char_05/train"
+  #   ref_dir: "../dataset/char_05/ref"
+
+evaluation:
+  num_images_per_prompt: 4
+  guidance_scale: 7.5
+  num_inference_steps: 30
+  image_size: 512
+  compute_confusion_gap: false    # Phase 2: enable cross-character identity confusion analysis
+  per_prompt_breakdown: false     # Phase 2: enable per-prompt-template CCIP scoring
+  prompts_per_character:
+    - "{instance_prompt}, portrait, white background"
+    - "{instance_prompt}, upper body, smiling"
+    - "{instance_prompt}, full body, standing"
+    - "{instance_prompt}, close-up face, detailed"
+    - "{instance_prompt}, looking to the side, soft lighting"
+    - "{instance_prompt}, chibi style, cute expression"
+
+# Only used when method == "c_lora_scaffold"
+c_lora:
+  regularization_weight: 0.1
+  regularize_layers: ["to_k", "to_v"]
+  # Phase 2: importance-weighted regularization
+  # Options: "none" (uniform L2), "magnitude" (param change magnitude), "fisher_diag" (diagonal Fisher)
+  importance_method: "magnitude"
+  importance_decay: 0.9   # Exponential decay for accumulating importance across tasks
