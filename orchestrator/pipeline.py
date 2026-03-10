@@ -26,24 +26,24 @@ from typing import Dict, List, Optional
 
 import torch
 
-from src.config.schema import PipelineConfig
-from src.data.dataset import (
+from config.schema import PipelineConfig
+from data.dataset import (
     PriorPreservationDataset,
     build_task_prompt,
     validate_task_data,
 )
-from src.eval.generator import generate_eval_images
-from src.eval.metrics import (
+from eval.generator import generate_eval_images
+from eval.metrics import (
     build_score_matrix,
     compute_ccip_score,
     compute_confusion_gap,
     compute_forgetting_metrics,
     compute_per_prompt_scores,
 )
-from src.eval.report import save_full_report
-from src.methods.base import BaseMethod
-from src.training.trainer import DreamBoothLoRATrainer
-from src.utils.io import (
+from eval.report import save_full_report
+from methods.base import BaseMethod
+from training.trainer import DreamBoothLoRATrainer
+from utils.io import (
     ensure_dir,
     load_task_registry,
     save_json,
@@ -69,11 +69,11 @@ def create_method(config: PipelineConfig) -> BaseMethod:
     method_name = config.experiment.method
 
     if method_name == "naive_sequential":
-        from src.methods.naive_sequential import NaiveSequential
+        from methods.naive_sequential import NaiveSequential
         return NaiveSequential()
 
     elif method_name == "c_lora_scaffold":
-        from src.methods.c_lora_scaffold import CLoRAScaffold
+        from methods.c_lora_scaffold import CLoRAScaffold
         return CLoRAScaffold(
             regularization_weight=config.c_lora.regularization_weight,
             importance_method=config.c_lora.importance_method,
@@ -81,7 +81,7 @@ def create_method(config: PipelineConfig) -> BaseMethod:
         )
 
     elif method_name == "faithful_c_lora":
-        from src.methods.faithful_c_lora import FaithfulCLoRA
+        from methods.faithful_c_lora import FaithfulCLoRA
         return FaithfulCLoRA(
             regularization_weight=config.c_lora.regularization_weight,
             token_init=config.c_lora.token_init,
@@ -525,7 +525,7 @@ class ContinualPipeline:
             if (self.config.experiment.method == "c_lora_scaffold"
                     and self.config.c_lora.importance_method == "fisher_diag"
                     and t > 0):
-                from src.methods.c_lora_scaffold import CLoRAScaffold
+                from methods.c_lora_scaffold import CLoRAScaffold
                 if isinstance(self.method, CLoRAScaffold):
                     self.method.setup_fisher_hooks(self.trainer)
 
@@ -701,7 +701,7 @@ class ContinualPipeline:
         self.trainer.restore_faithful_state(str(self.base_output))
 
         # Rebuild occupancy masks from saved adapters (for regularization)
-        from src.methods.faithful_c_lora import FaithfulCLoRA
+        from methods.faithful_c_lora import FaithfulCLoRA
         if isinstance(self.method, FaithfulCLoRA):
             for t in range(num_completed):
                 adapter_name = f"task_{t}"
@@ -730,7 +730,7 @@ class ContinualPipeline:
         # Load previous scores
         scores_path = self.base_output / "scores_intermediate.json"
         if scores_path.exists():
-            from src.utils.io import load_json
+            from utils.io import load_json
             self.scores = {int(k): v for k, v in load_json(str(scores_path)).items()}
 
         # Setup prior preservation

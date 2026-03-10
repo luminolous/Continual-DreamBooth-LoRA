@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-set -e
+# set -e
 
-# cd DreamBooth-CLoRA
+# cd Continual-DreamBooth-LoRA
 
-export PYTHONPATH="$PWD"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-python src/main.py \
-  --config configs/tasks_5char.yaml \
+python main.py \
+  --config configs/tasks_5char_naive.yaml

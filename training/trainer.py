@@ -27,13 +27,13 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from src.config.schema import ModelConfig, TaskConfig, TrainingConfig
-from src.data.dataset import (
+from config.schema import ModelConfig, TaskConfig, TrainingConfig
+from data.dataset import (
     DreamBoothDataset,
     PriorPreservationDataset,
     collate_dreambooth,
 )
-from src.utils.io import ensure_dir, save_lora_weights, save_token_embeddings
+from utils.io import ensure_dir, save_lora_weights, save_token_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -460,7 +460,7 @@ class DreamBoothLoRATrainer:
             save_token_embeddings(self.text_encoder, all_token_ids, emb_path)
 
         # 4. Save adapter name list for restore ordering
-        from src.utils.io import save_json
+        from utils.io import save_json
         save_json({
             "adapter_names": self._adapter_names,
             "task_token_ids": {k: v for k, v in self._task_token_ids.items()},
@@ -502,7 +502,7 @@ class DreamBoothLoRATrainer:
                 "Was the experiment run with faithful_c_lora method?"
             )
 
-        from src.utils.io import load_json, load_token_embeddings
+        from utils.io import load_json, load_token_embeddings
 
         # 1. Load restore metadata
         meta_path = state_dir / "restore_metadata.json"
@@ -683,7 +683,7 @@ class DreamBoothLoRATrainer:
         out_path = ensure_dir(output_dir)
 
         # Check if already generated
-        from src.data.dataset import find_images
+        from data.dataset import find_images
         existing = find_images(out_path)
         if len(existing) >= num_images:
             logger.info(
@@ -1023,12 +1023,12 @@ class DreamBoothLoRATrainer:
             pipe = pipe.to(self._device)
 
             if lora_dir is not None:
-                from src.utils.io import load_lora_weights_into_pipeline
+                from utils.io import load_lora_weights_into_pipeline
                 load_lora_weights_into_pipeline(pipe, lora_dir)
 
             # Load token embeddings if directory provided
             if token_embeddings_dir:
-                from src.utils.io import load_token_embeddings
+                from utils.io import load_token_embeddings
                 emb_dir = Path(token_embeddings_dir)
                 for emb_file in sorted(emb_dir.rglob("token_embeddings.pt")):
                     try:
@@ -1082,7 +1082,7 @@ class DreamBoothLoRATrainer:
             self.unet.set_adapter(adapter_name)
 
         if token_embedding_path:
-            from src.utils.io import load_token_embeddings
+            from utils.io import load_token_embeddings
             load_token_embeddings(pipe.text_encoder, pipe.tokenizer, token_embedding_path)
 
         logger.info("Built diagnostic pipeline with adapter '%s' only", adapter_name)

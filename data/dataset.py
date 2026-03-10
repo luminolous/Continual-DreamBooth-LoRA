@@ -20,7 +20,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from src.config.schema import TaskConfig
+from config.schema import TaskConfig
 
 logger = logging.getLogger(__name__)
 

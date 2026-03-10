@@ -16,8 +16,8 @@ from typing import List, Optional
 
 import torch
 
-from src.config.schema import EvaluationConfig, TaskConfig
-from src.utils.io import ensure_dir
+from config.schema import EvaluationConfig, TaskConfig
+from utils.io import ensure_dir
 
 logger = logging.getLogger(__name__)
 

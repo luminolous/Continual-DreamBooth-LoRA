@@ -18,23 +18,23 @@
 experiment:
   name: "5char_naive"
   seed: 42
-  output_dir: "../outputs/naive-sequential"
+  output_dir: "../outputs/naive-sequential/debug"
   method: "naive_sequential"   # "naive_sequential" | "c_lora_scaffold" | "faithful_c_lora"
 
 model:
   pretrained_model_name: "hakurei/waifu-diffusion"
-  lora_rank: 4
-  lora_alpha: 4
+  lora_rank: 16
+  lora_alpha: 16
   # For c_lora_scaffold method, only ["to_k", "to_v"] are used by default.
   # Naive baseline may use broader targets like ["to_k", "to_v", "to_q", "to_out.0"].
-  lora_target_modules: ["to_k", "to_v"]
+  lora_target_modules: ["to_k", "to_v", "to_q", "to_out.0"]
   use_xformers: false
   enable_xformers_memory_efficient_attention: false
   mixed_precision: "bf16"
 
 training:
-  learning_rate: 1.0e-4
-  max_train_steps: 80
+  learning_rate: 2.0e-4
+  max_train_steps: 1500
   train_batch_size: 1
   gradient_accumulation_steps: 1
   gradient_checkpointing: true
@@ -48,22 +48,22 @@ tasks:
     trigger_token: "miku"
     instance_prompt: "a photo of miku anime girl"
     class_prompt: "a photo of anime character"
-    data_dir: "../nakano-debug/Miku-debug/train"
-    ref_dir: "../nakano-debug/Miku-debug/ref"
+    data_dir: "../dataset/nakano-images-train/Miku"
+    ref_dir: "../dataset/nakano-debug/Miku-debug/ref"
 
   - name: "Yotsuba"
     trigger_token: "yotsuba"
     instance_prompt: "a photo of yotsuba anime girl"
     class_prompt: "a photo of anime character"
-    data_dir: "../nakano-debug/Yotsuba-debug/train"
-    ref_dir: "../nakano-debug/Yotsuba-debug/ref"
+    data_dir: "../dataset/nakano-images-train/Yotsuba"
+    ref_dir: "../dataset/nakano-debug/Yotsuba-debug/ref"
 
   - name: "Nino"
     trigger_token: "nino"
     instance_prompt: "a photo of nino anime girl"
     class_prompt: "a photo of anime character"
-    data_dir: "../nakano-debug/Nino-debug/train"
-    ref_dir: "../nakano-debug/Nino-debug/ref"
+    data_dir: "../dataset/nakano-images-train/Nino"
+    ref_dir: "../dataset/nakano-debug/Nino-debug/ref"
 
   # - name: "char_04"
   #   trigger_token: "lumy04"

@@ -3,19 +3,19 @@ CLI entry point for Continual DreamBooth-CLoRA.
 
 Usage:
     # Legacy methods (naive baseline / scaffold)
-    python -m src.main --config configs/tasks_5char.yaml
+    python main --config configs/tasks_5char.yaml
 
     # Faithful C-LoRA (shared continual model with occupancy regularization)
-    python -m src.main --config configs/tasks_5char_faithful.yaml
+    python main --config configs/tasks_5char_faithful.yaml
 
     # Eval-only from faithful checkpoint (restores full continual state)
-    python -m src.main --config configs/tasks_5char_faithful.yaml --eval-only outputs/5char_faithful
+    python main --config configs/tasks_5char_faithful.yaml --eval-only outputs/5char_faithful
 
     # Eval-only from legacy checkpoint
-    python -m src.main --config configs/tasks_5char.yaml --eval-only outputs/5char_naive/checkpoints/task_04_char_05/lora_weights
+    python main --config configs/tasks_5char.yaml --eval-only outputs/5char_naive/checkpoints/task_04_char_05/lora_weights
 
     # Resume faithful training from checkpoint
-    python -m src.main --config configs/tasks_5char_faithful.yaml --resume
+    python main --config configs/tasks_5char_faithful.yaml --resume
 """
 
 from __future__ import annotations
@@ -24,10 +24,10 @@ import argparse
 import sys
 import time
 
-from src.config.schema import load_config
-from src.orchestrator.pipeline import ContinualPipeline
-from src.utils.logging import setup_logging
-from src.utils.seed import set_global_seed
+from config.schema import load_config
+from orchestrator.pipeline import ContinualPipeline
+from utils.logging import setup_logging
+from utils.seed import set_global_seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,10 +36,10 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.main --config configs/tasks_5char.yaml
-  python -m src.main --config configs/tasks_5char.yaml --dry-run
-  python -m src.main --config configs/tasks_5char_faithful.yaml --eval-only outputs/5char_faithful
-  python -m src.main --config configs/tasks_5char_faithful.yaml --resume
+  python main --config configs/tasks_5char.yaml
+  python main --config configs/tasks_5char.yaml --dry-run
+  python main --config configs/tasks_5char_faithful.yaml --eval-only outputs/5char_faithful
+  python main --config configs/tasks_5char_faithful.yaml --resume
         """,
     )
     parser.add_argument(

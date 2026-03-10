@@ -37,7 +37,7 @@ from typing import Any, Callable, Dict, Optional
 
 import torch
 
-from src.methods.base import BaseMethod
+from methods.base import BaseMethod
 
 logger = logging.getLogger(__name__)
 
