@@ -28,26 +28,23 @@ def save_lora_weights(
     unet: torch.nn.Module,
     output_dir: str | Path,
     filename: str = "lora_weights.safetensors",
+    selected_adapters: Optional[List[str]] = None,
 ) -> Path:
-    """Save LoRA adapter weights from a PEFT-wrapped UNet.
-
-    Args:
-        unet: The PEFT-wrapped UNet model.
-        output_dir: Directory to save weights to.
-        filename: Name of the weights file.
-
-    Returns:
-        Path to the saved weights directory.
-    """
     from peft import PeftModel
 
     out_path = ensure_dir(output_dir)
 
     if isinstance(unet, PeftModel):
-        unet.save_pretrained(str(out_path))
-        logger.info("Saved LoRA weights (PEFT) to %s", out_path)
+        unet.save_pretrained(
+            str(out_path),
+            selected_adapters=selected_adapters,
+        )
+        logger.info(
+            "Saved LoRA weights (PEFT) to %s (selected_adapters=%s)",
+            out_path,
+            selected_adapters,
+        )
     else:
-        # Fallback: save only lora parameters by name
         lora_state = {
             k: v.cpu().clone()
             for k, v in unet.state_dict().items()

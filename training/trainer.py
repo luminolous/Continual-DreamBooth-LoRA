@@ -29,14 +29,37 @@ from tqdm.auto import tqdm
 
 from config.schema import ModelConfig, TaskConfig, TrainingConfig
 from data.dataset import (
-    DreamBoothDataset,
+    TaggedConceptDataset,
     PriorPreservationDataset,
-    collate_dreambooth,
+    collate_examples,
+    build_eval_prompt,
 )
 from utils.io import ensure_dir, save_lora_weights, save_token_embeddings
 
 logger = logging.getLogger(__name__)
 
+
+def merge_active_adapter_into_backbone(self, adapter_name: str) -> None:
+    from peft import PeftModel
+
+    if not isinstance(self.unet, PeftModel):
+        logger.warning("UNet is not a PeftModel, skipping merge")
+        return
+
+    logger.info("Merging adapter '%s' into backbone UNet", adapter_name)
+
+    try:
+        self.unet.set_adapter(adapter_name)
+    except Exception:
+        pass
+
+    merged_unet = self.unet.merge_and_unload()
+    self.unet = merged_unet.to(self._device, dtype=self._weight_dtype)
+
+    self._adapter_names = []
+    self._lora_injected = False
+
+    logger.info("Adapter '%s' merged and unloaded; trainer now holds merged backbone", adapter_name)
 
 class DreamBoothLoRATrainer:
     """Encapsulates DreamBooth-LoRA training for continual learning.
@@ -426,160 +449,68 @@ class DreamBoothLoRATrainer:
     # ------------------------------------------------------------------
 
     def save_faithful_state(self, output_dir: str) -> None:
-        """Save the complete faithful_c_lora model state for restore.
-
-        Saves:
-        - Tokenizer state (with all added task tokens)
-        - All PEFT adapter weights
-        - All token embeddings for registered task tokens
-
-        This enables deterministic reconstruction of the shared continual
-        model for eval-only and resume.
-
-        Args:
-            output_dir: Base experiment output directory.
-        """
         state_dir = ensure_dir(Path(output_dir) / "faithful_state")
 
-        # 1. Save tokenizer state (includes all added tokens)
         tokenizer_dir = str(state_dir / "tokenizer")
         self.tokenizer.save_pretrained(tokenizer_dir)
-        logger.info("Saved tokenizer state to %s", tokenizer_dir)
 
-        # 2. Save all PEFT adapter weights
-        from peft import PeftModel
-        if isinstance(self.unet, PeftModel):
-            adapters_dir = str(state_dir / "adapters")
-            self.unet.save_pretrained(adapters_dir)
-            logger.info("Saved all PEFT adapters to %s", adapters_dir)
+        merged_unet_dir = str(state_dir / "merged_unet")
+        self.unet.save_pretrained(merged_unet_dir)
+        logger.info("Saved merged UNet to %s", merged_unet_dir)
 
-        # 3. Save all task token embeddings
         if self._task_token_ids:
             all_token_ids = list(self._task_token_ids.values())
             emb_path = str(state_dir / "all_token_embeddings.pt")
             save_token_embeddings(self.text_encoder, all_token_ids, emb_path)
 
-        # 4. Save adapter name list for restore ordering
         from utils.io import save_json
-        save_json({
-            "adapter_names": self._adapter_names,
-            "task_token_ids": {k: v for k, v in self._task_token_ids.items()},
-        }, str(state_dir / "restore_metadata.json"))
-
-        logger.info(
-            "Faithful state saved: %d adapters, %d tokens -> %s",
-            len(self._adapter_names), len(self._task_token_ids), state_dir,
+        save_json(
+            {
+                "task_token_ids": {k: v for k, v in self._task_token_ids.items()},
+            },
+            str(state_dir / "restore_metadata.json"),
         )
 
-    def restore_faithful_state(
-        self,
-        output_dir: str,
-        adapter_names_to_load: Optional[List[str]] = None,
-    ) -> None:
-        """Restore the complete faithful_c_lora model state from checkpoint.
+        logger.info("Faithful state saved to %s", state_dir)
 
-        Reconstructs:
-        1. Tokenizer with all added task tokens
-        2. Text encoder with resized embeddings
-        3. All or selected PEFT adapters
-        4. Learned token embeddings
-
-        After this call, the trainer is ready for inference with the
-        shared continual model (all adapters composed).
-
-        Args:
-            output_dir: Base experiment output directory.
-            adapter_names_to_load: Optional subset of adapters to load.
-                                  If None, loads all adapters from checkpoint.
-        """
+    def restore_faithful_state(self, output_dir: str) -> None:
         if not self._models_loaded:
             raise RuntimeError("Call load_models() before restore_faithful_state()")
 
         state_dir = Path(output_dir) / "faithful_state"
         if not state_dir.is_dir():
-            raise FileNotFoundError(
-                f"Faithful state directory not found: {state_dir}. "
-                "Was the experiment run with faithful_c_lora method?"
-            )
+            raise FileNotFoundError(f"Faithful state directory not found: {state_dir}")
 
         from utils.io import load_json, load_token_embeddings
+        from transformers import CLIPTokenizer
+        from diffusers import UNet2DConditionModel
 
-        # 1. Load restore metadata
         meta_path = state_dir / "restore_metadata.json"
-        if meta_path.exists():
-            meta = load_json(str(meta_path))
-            saved_adapter_names = meta.get("adapter_names", [])
-            saved_token_ids = meta.get("task_token_ids", {})
-        else:
-            saved_adapter_names = []
-            saved_token_ids = {}
+        meta = load_json(str(meta_path)) if meta_path.exists() else {}
+        saved_token_ids = meta.get("task_token_ids", {})
 
-        # 2. Restore tokenizer (includes all added tokens)
         tokenizer_dir = state_dir / "tokenizer"
         if tokenizer_dir.is_dir():
-            from transformers import CLIPTokenizer
             self.tokenizer = CLIPTokenizer.from_pretrained(str(tokenizer_dir))
-            # Resize text encoder to match tokenizer
             self.text_encoder.resize_token_embeddings(len(self.tokenizer))
-            logger.info(
-                "Restored tokenizer from %s (vocab_size=%d)",
-                tokenizer_dir, len(self.tokenizer),
-            )
-        else:
-            logger.warning("No saved tokenizer found at %s", tokenizer_dir)
 
-        # 3. Restore PEFT adapters
-        adapters_dir = state_dir / "adapters"
-        if adapters_dir.is_dir():
-            from peft import PeftModel
-            names_to_load = adapter_names_to_load or saved_adapter_names
+        merged_unet_dir = state_dir / "merged_unet"
+        if merged_unet_dir.is_dir():
+            self.unet = UNet2DConditionModel.from_pretrained(
+                str(merged_unet_dir),
+                torch_dtype=self._weight_dtype,
+            ).to(self._device)
 
-            if names_to_load:
-                # Load first adapter
-                first_name = names_to_load[0]
-                self.unet = PeftModel.from_pretrained(
-                    self.unet,
-                    str(adapters_dir),
-                    adapter_name=first_name,
-                    is_trainable=False,
-                )
-                self._adapter_names = [first_name]
-                self._lora_injected = True
-
-                # Load remaining adapters
-                for name in names_to_load[1:]:
-                    try:
-                        self.unet.load_adapter(
-                            str(adapters_dir),
-                            adapter_name=name,
-                            is_trainable=False,
-                        )
-                        self._adapter_names.append(name)
-                    except Exception as e:
-                        logger.warning("Could not load adapter '%s': %s", name, e)
-
-                logger.info(
-                    "Restored %d adapters: %s",
-                    len(self._adapter_names), self._adapter_names,
-                )
-        else:
-            logger.warning("No saved adapters found at %s", adapters_dir)
-
-        # 4. Restore token embeddings
         emb_path = state_dir / "all_token_embeddings.pt"
         if emb_path.exists():
             load_token_embeddings(self.text_encoder, self.tokenizer, str(emb_path))
 
-        # 5. Restore token ID mapping
         self._task_token_ids = {k: int(v) for k, v in saved_token_ids.items()}
-
-        # 6. Clear any lingering gradient hooks (not needed for inference)
+        self._adapter_names = []
+        self._lora_injected = False
         self.clear_token_embedding_hooks()
 
-        logger.info(
-            "Faithful state restored: %d adapters, %d tokens, ready for inference",
-            len(self._adapter_names), len(self._task_token_ids),
-        )
+        logger.info("Restored faithful merged state from %s", state_dir)
 
     # ------------------------------------------------------------------
     # Legacy single-adapter methods (naive_sequential / c_lora_scaffold)
@@ -741,10 +672,11 @@ class DreamBoothLoRATrainer:
         task: TaskConfig,
         output_dir: str,
         extra_loss_fn: Optional[Callable] = None,
-        prompt_override: Optional[str] = None,
         prior_dataset: Optional[Any] = None,
         prior_loss_weight: float = 1.0,
         token_ids_to_save: Optional[List[int]] = None,
+        selected_adapter_name: Optional[str] = None,
+        c_lora_config: Optional[Any] = None,
     ) -> str:
         """Run DreamBooth-LoRA training for a single task.
 
@@ -765,13 +697,10 @@ class DreamBoothLoRATrainer:
             raise RuntimeError("Call inject_lora() or create_task_adapter() before train()")
 
         tc = self.training_config
-        instance_prompt = prompt_override or task.instance_prompt
-
-        # Build instance dataset and dataloader
-        dataset = DreamBoothDataset(
-            data_dir=task.data_dir,
-            instance_prompt=instance_prompt,
+        dataset = TaggedConceptDataset(
+            task=task,
             tokenizer=self.tokenizer,
+            c_lora_config=c_lora_config,
             size=512,
             center_crop=True,
             repeats=max(1, tc.max_train_steps // 10),
@@ -781,10 +710,16 @@ class DreamBoothLoRATrainer:
             dataset,
             batch_size=tc.train_batch_size,
             shuffle=True,
-            collate_fn=collate_dreambooth,
+            collate_fn=collate_examples,
             num_workers=0,
             pin_memory=True,
         )
+
+        sample_0 = dataset[0]
+        logger.info("Sample training prompt[0]: %s", sample_0.get("prompt", ""))
+        if len(dataset) > 1:
+            sample_1 = dataset[1]
+            logger.info("Sample training prompt[1]: %s", sample_1.get("prompt", ""))
 
         # Prior preservation dataloader (optional)
         prior_dataloader = None
@@ -794,7 +729,7 @@ class DreamBoothLoRATrainer:
                 prior_dataset,
                 batch_size=tc.train_batch_size,
                 shuffle=True,
-                collate_fn=collate_dreambooth,
+                collate_fn=collate_examples,
                 num_workers=0,
                 pin_memory=True,
             )
@@ -944,7 +879,11 @@ class DreamBoothLoRATrainer:
 
         # Save LoRA checkpoint
         ckpt_dir = str(ensure_dir(Path(output_dir) / "lora_weights"))
-        save_lora_weights(self.unet, ckpt_dir)
+        save_lora_weights(
+            self.unet,
+            ckpt_dir,
+            selected_adapters=[selected_adapter_name] if selected_adapter_name else None,
+        )
         logger.info("Checkpoint saved to %s", ckpt_dir)
 
         # Save token embeddings if specified
@@ -960,30 +899,13 @@ class DreamBoothLoRATrainer:
 
     def build_inference_pipeline(
         self,
-        adapter_names: Optional[List[str]] = None,
         token_embeddings_dir: Optional[str] = None,
         lora_dir: Optional[str] = None,
     ):
-        """Build a StableDiffusionPipeline with the shared continual model.
-
-        For faithful_c_lora: uses the trainer's UNet (which holds all adapters)
-        and text encoder (which holds all token embeddings). No heavy model
-        reload — just references the in-memory models.
-
-        For legacy: loads a single LoRA checkpoint into a fresh pipeline.
-
-        Args:
-            adapter_names: List of adapter names to activate (faithful mode).
-            token_embeddings_dir: Legacy: directory with token_embeddings.pt files.
-            lora_dir: Legacy: path to single LoRA checkpoint directory.
-
-        Returns:
-            A StableDiffusionPipeline ready for generation.
-        """
         from diffusers import StableDiffusionPipeline
 
-        if adapter_names and self._adapter_names:
-            # Faithful mode: build pipeline from in-memory models (no reload)
+        # faithful merged-online mode: use in-memory merged UNet directly
+        if lora_dir is None:
             pipe = StableDiffusionPipeline.from_pretrained(
                 self.model_config.pretrained_model_name,
                 unet=self.unet,
@@ -994,26 +916,7 @@ class DreamBoothLoRATrainer:
                 requires_safety_checker=False,
             )
             pipe = pipe.to(self._device)
-
-            # Set all specified adapters active for composed inference
-            from peft import PeftModel
-            if isinstance(self.unet, PeftModel):
-                try:
-                    self.unet.set_adapter(adapter_names)
-                except Exception:
-                    for name in adapter_names:
-                        try:
-                            self.unet.set_adapter(name)
-                        except Exception as e:
-                            logger.warning("Could not set adapter '%s': %s", name, e)
-
-            logger.info(
-                "Built composed inference pipeline with %d adapters: %s",
-                len(adapter_names), adapter_names,
-            )
-
         else:
-            # Legacy mode: fresh pipeline + single LoRA
             pipe = StableDiffusionPipeline.from_pretrained(
                 self.model_config.pretrained_model_name,
                 torch_dtype=self._weight_dtype,
@@ -1022,21 +925,8 @@ class DreamBoothLoRATrainer:
             )
             pipe = pipe.to(self._device)
 
-            if lora_dir is not None:
-                from utils.io import load_lora_weights_into_pipeline
-                load_lora_weights_into_pipeline(pipe, lora_dir)
-
-            # Load token embeddings if directory provided
-            if token_embeddings_dir:
-                from utils.io import load_token_embeddings
-                emb_dir = Path(token_embeddings_dir)
-                for emb_file in sorted(emb_dir.rglob("token_embeddings.pt")):
-                    try:
-                        pipe.tokenizer = self.tokenizer
-                        pipe.text_encoder = self.text_encoder
-                        load_token_embeddings(pipe.text_encoder, pipe.tokenizer, emb_file)
-                    except Exception as e:
-                        logger.warning("Could not load embeddings from %s: %s", emb_file, e)
+            from utils.io import load_lora_weights_into_pipeline
+            load_lora_weights_into_pipeline(pipe, lora_dir)
 
         if self.model_config.enable_xformers_memory_efficient_attention:
             try:

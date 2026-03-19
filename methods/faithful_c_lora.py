@@ -123,37 +123,22 @@ class FaithfulCLoRA(BaseMethod):
         trainer: Any,
         config: Any,
     ) -> None:
-        """Create a new task adapter and freeze all previous adapters.
-
-        Also registers the task's personalized token.
-
-        Args:
-            task_idx: Zero-based task index.
-            trainer: DreamBoothLoRATrainer instance.
-            config: PipelineConfig.
-        """
         task = config.tasks[task_idx]
         adapter_name = f"task_{task_idx}"
 
-        # Register personalized token
         token_id = trainer.register_task_token(
-            task.trigger_token, init_mode=self.token_init
+            task.trigger_token,
+            init_mode=self.token_init,
         )
 
-        # Freeze all previous adapters
-        for prev_name in trainer.get_all_adapter_names():
-            trainer.freeze_adapter(prev_name)
-
-        # Create fresh adapter for this task
         trainer.create_task_adapter(adapter_name)
         self._current_adapter = adapter_name
 
-        # Set only the new token's embedding as trainable
         if config.c_lora.train_token_embeddings:
             trainer.set_token_embeddings_trainable([token_id])
 
         logger.info(
-            "[FaithfulCLoRA] Task %d: created adapter '%s', token '<%s>' (ID=%d)",
+            "[FaithfulCLoRA] Task %d: new adapter '%s', token '<%s>' (ID=%d)",
             task_idx, adapter_name, task.trigger_token, token_id,
         )
 
@@ -266,3 +251,17 @@ class FaithfulCLoRA(BaseMethod):
             len(self._occupancy),
             len(self._past_factors),
         )
+
+def export_state(self) -> dict:
+    return {
+        "past_factors": self._past_factors,
+        "occupancy": self._occupancy,
+        "current_adapter": self._current_adapter,
+        "active": self._active,
+    }
+
+def load_state(self, state: dict) -> None:
+    self._past_factors = state.get("past_factors", [])
+    self._occupancy = state.get("occupancy", {})
+    self._current_adapter = state.get("current_adapter")
+    self._active = state.get("active", False)

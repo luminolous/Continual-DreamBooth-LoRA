@@ -1,30 +1,13 @@
-# =============================================================================
-# Continual DreamBooth-CLoRA — Faithful C-LoRA Experiment Config
-# =============================================================================
-#
-# This config uses the faithful_c_lora method:
-# - Per-task LoRA adapters composed into a shared continual model
-# - Randomly initialized personalized token embeddings
-# - C-LoRA-style prompts (no explicit object/class word)
-# - Occupancy-based regularization from past LoRA factors
-# - Prior preservation (default ON)
-#
-# PRIMARY evaluation: composed model with all adapters active
-# Task identity comes from token embeddings, not adapter selection
-# Forgetting = adapter interference in the composed model
-# =============================================================================
-
 experiment:
-  name: "5char_faithful"
+  name: "anime_clora_tagged"
   seed: 42
-  output_dir: "../outputs/faithful/debug"
+  output_dir: "../outputs/faithful/tagged"
   method: "faithful_c_lora"
 
 model:
   pretrained_model_name: "hakurei/waifu-diffusion"
   lora_rank: 16
   lora_alpha: 16
-  # Cross-attention K/V only (auto-set to attn2.to_k, attn2.to_v for faithful mode)
   lora_target_modules: ["to_k", "to_v"]
   enable_xformers_memory_efficient_attention: false
   mixed_precision: "bf16"
@@ -39,40 +22,19 @@ training:
   seed: 42
 
 tasks:
+  - name: "Venti"
+    trigger_token: "venti_lumy"
+    eval_prompt: "a portrait of <venti_lumy>"
+    class_prompt: "a photo of anime character"
+    data_dir: "../dataset/venti/train"
+    ref_dir: "../dataset/venti/ref"
+
   - name: "Miku"
-    trigger_token: "miku"
-    instance_prompt: "a photo of miku anime girl"
+    trigger_token: "miku_lumy"
+    eval_prompt: "a portrait of <miku_lumy>"
     class_prompt: "a photo of anime character"
-    data_dir: "../dataset/nakano-debug/Miku-debug/train"
-    ref_dir: "../dataset/nakano-debug/Miku-debug/ref"
-
-  - name: "Yotsuba"
-    trigger_token: "yotsuba"
-    instance_prompt: "a photo of yotsuba anime girl"
-    class_prompt: "a photo of anime character"
-    data_dir: "../dataset/nakano-debug/Yotsuba-debug/train"
-    ref_dir: "../dataset/nakano-debug/Yotsuba-debug/ref"
-
-  - name: "Nino"
-    trigger_token: "nino"
-    instance_prompt: "a photo of nino anime girl"
-    class_prompt: "a photo of anime character"
-    data_dir: "../dataset/nakano-debug/Nino-debug/train"
-    ref_dir: "../dataset/nakano-debug/Nino-debug/ref"
-
-  # - name: "char_04"
-  #   trigger_token: "lumy04"
-  #   instance_prompt: "a photo of lumy04 anime girl"
-  #   class_prompt: "a photo of anime character"
-  #   data_dir: "../dataset/char_04/train"
-  #   ref_dir: "../dataset/char_04/ref"
-
-  # - name: "char_05"
-  #   trigger_token: "lumy05"
-  #   instance_prompt: "a photo of lumy05 anime girl"
-  #   class_prompt: "a photo of anime character"
-  #   data_dir: "../dataset/char_05/train"
-  #   ref_dir: "../dataset/char_05/ref"
+    data_dir: "../dataset/miku/train"
+    ref_dir: "../dataset/miku/ref"
 
 evaluation:
   num_images_per_prompt: 4
@@ -90,29 +52,29 @@ evaluation:
     - "{instance_prompt}, chibi style, cute expression"
 
 c_lora:
-  # Token strategy
-  token_init: "random"                 # randomly initialized personalized tokens
-  train_token_embeddings: true         # train token embedding rows
+  token_init: "random"
+  train_token_embeddings: true
 
-  # Prompt strategy
-  prompt_mode: "clora"                 # "a photo of <lumy01>" — no class word
+  prompt_mode: "clora"
+  use_image_captions: true
+  caption_extensions: [".txt", ".caption", ".tags"]
+  caption_prefix_template: "a portrait of <{trigger_token}>"
+  caption_suffix_template: "anime, masterpiece, best quality"
+  strip_trigger_from_tags: true
+  strip_task_name_from_tags: true
+  lowercase_tags: true
+  shuffle_tags: false
+  max_caption_tags: 48
 
-  # Adapter strategy
-  adapter_strategy: "per_task"         # per-task adapters composed at inference
-
-  # Regularization
-  regularizer_type: "occupancy"        # occupancy-based interference constraint
+  adapter_strategy: "per_task"
+  regularizer_type: "occupancy"
   regularization_weight: 0.1
 
-  # Prior preservation
-  prior_preservation: true
+  prior_preservation: false
   prior_loss_weight: 1.0
   num_class_images: 400
   class_prompt: "a photo of anime character"
 
-  # Inference (PRIMARY = composed model)
-  inference_adapter_mode: "compose_all"
-
-  # Optional diagnostics
-  run_diagnostic_eval: false           # set true for isolated-adapter debugging
-  run_multi_concept_probe: true        # multi-concept generation (visual only)
+  inference_adapter_mode: "merged_online"
+  run_diagnostic_eval: false
+  run_multi_concept_probe: true

@@ -92,93 +92,174 @@ def validate_task_data(task: TaskConfig, min_images: int = 1) -> None:
 # Prompt building
 # ---------------------------------------------------------------------------
 
-def build_task_prompt(task: TaskConfig, prompt_mode: str) -> str:
-    """Build the training/eval prompt for a task based on prompt mode.
-
-    Args:
-        task: Task configuration with trigger_token and instance_prompt.
-        prompt_mode: "clora" or "dreambooth".
-
-    Returns:
-        The constructed prompt string.
-
-    In clora mode: "a photo of <trigger_token>" — no explicit class word.
-    In dreambooth mode: uses the existing instance_prompt as-is.
-    """
-    if prompt_mode == "clora":
-        # C-LoRA-style: personalized token only, no object/class word
-        return f"a photo of <{task.trigger_token}>"
-    elif prompt_mode == "dreambooth":
-        # DreamBooth-style: uses the full instance_prompt from config
-        return task.instance_prompt
-    else:
-        raise ValueError(f"Unknown prompt_mode '{prompt_mode}', expected 'clora' or 'dreambooth'")
-
+def build_eval_prompt(task: TaskConfig) -> str:
+    return task.eval_prompt or task.instance_prompt or f"a portrait of <{task.trigger_token}>"
 
 # ---------------------------------------------------------------------------
 # Instance dataset
 # ---------------------------------------------------------------------------
 
-class DreamBoothDataset(Dataset):
-    """Dataset for DreamBooth-LoRA training on a single character.
+import json
+import random
+import re
+from typing import Dict
 
-    Loads images from a directory and pairs them with tokenized instance prompts.
-    Images are resized and normalized for Stable Diffusion's VAE.
-    """
+def _candidate_caption_paths(image_path: Path, exts: List[str]) -> List[Path]:
+    paths = []
+    for ext in exts:
+        ext = ext if ext.startswith(".") else f".{ext}"
+        paths.append(image_path.with_suffix(ext))                  # image.png -> image.txt
+        paths.append(image_path.parent / f"{image_path.name}{ext}")  # image.png.txt
+    return paths
 
+def _load_metadata_map(data_dir: Path) -> Dict[str, str]:
+    candidates = [
+        data_dir / "metadata.jsonl",
+        data_dir / "captions.jsonl",
+        data_dir / "tags.jsonl",
+    ]
+    mapping: Dict[str, str] = {}
+    for path in candidates:
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                fname = (
+                    obj.get("file_name")
+                    or obj.get("filename")
+                    or obj.get("image")
+                    or obj.get("path")
+                )
+                text = (
+                    obj.get("text")
+                    or obj.get("caption")
+                    or obj.get("tags")
+                    or obj.get("prompt")
+                )
+                if fname and text:
+                    mapping[Path(fname).name] = str(text)
+        break
+    return mapping
+
+def _split_tags(raw: str) -> List[str]:
+    parts = re.split(r"[,\\n|]", raw)
+    return [p.strip() for p in parts if p.strip()]
+
+def _sanitize_tags(tags: List[str], task: TaskConfig, cfg) -> List[str]:
+    out = []
+    trigger_plain = task.trigger_token.lower().strip()
+    task_name = task.name.lower().strip()
+
+    banned = {f"<{trigger_plain}>", trigger_plain}
+    if cfg.strip_task_name_from_tags and task_name:
+        banned.add(task_name)
+
+    for tag in tags:
+        t = tag.strip()
+        t_cmp = t.lower() if cfg.lowercase_tags else t
+        if t_cmp in banned:
+            continue
+        if cfg.lowercase_tags:
+            t = t_cmp
+        out.append(t)
+
+    # deduplicate while preserving order
+    dedup = []
+    seen = set()
+    for t in out:
+        if t not in seen:
+            dedup.append(t)
+            seen.add(t)
+
+    if cfg.shuffle_tags:
+        random.shuffle(dedup)
+
+    if cfg.max_caption_tags is not None:
+        dedup = dedup[: cfg.max_caption_tags]
+
+    return dedup
+
+def build_image_caption_prompt(task: TaskConfig, raw_caption: str, cfg) -> str:
+    prefix = cfg.caption_prefix_template.format(
+        trigger_token=task.trigger_token,
+        name=task.name,
+    ).strip()
+
+    suffix = cfg.caption_suffix_template.format(
+        trigger_token=task.trigger_token,
+        name=task.name,
+    ).strip()
+
+    tags = _sanitize_tags(_split_tags(raw_caption), task, cfg)
+    body = ", ".join(tags)
+
+    pieces = []
+    if prefix:
+        pieces.append(prefix)
+    if body:
+        pieces.append(body)
+    if suffix:
+        pieces.append(suffix)
+
+    return ", ".join([p for p in pieces if p]).strip(", ")
+
+class TaggedConceptDataset(Dataset):
     def __init__(
         self,
-        data_dir: str,
-        instance_prompt: str,
+        task: TaskConfig,
         tokenizer,
+        c_lora_config,
         size: int = 512,
         center_crop: bool = True,
         repeats: int = 1,
     ):
-        """
-        Args:
-            data_dir: Directory containing training images.
-            instance_prompt: The instance prompt string.
-            tokenizer: HuggingFace tokenizer for the text encoder.
-            size: Target image size (square).
-            center_crop: Whether to center-crop images.
-            repeats: Number of times to repeat the dataset (for short datasets).
-        """
-        self.data_dir = Path(data_dir)
-        self.instance_prompt = instance_prompt
+        self.task = task
         self.tokenizer = tokenizer
         self.size = size
+        self.c_lora_config = c_lora_config
+        self.data_dir = Path(task.data_dir)
 
         self.image_paths = find_images(self.data_dir)
         if not self.image_paths:
             raise ValueError(f"No images found in {self.data_dir}")
 
-        # Repeat short datasets to fill an epoch
         self.image_paths = self.image_paths * max(1, repeats)
+        self.metadata_map = _load_metadata_map(self.data_dir)
 
-        # Build transform pipeline
         transform_list = [transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR)]
         if center_crop:
             transform_list.append(transforms.CenterCrop(size))
         transform_list.extend([
             transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),  # Scale to [-1, 1]
+            transforms.Normalize([0.5], [0.5]),
         ])
         self.transform = transforms.Compose(transform_list)
 
-        # Pre-tokenize the instance prompt
-        self.input_ids = self.tokenizer(
-            instance_prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            return_tensors="pt",
-        ).input_ids.squeeze(0)
-
         logger.info(
-            "DreamBoothDataset: %d images (×%d repeats) from %s, prompt='%s'",
-            len(find_images(self.data_dir)), repeats, self.data_dir, instance_prompt,
+            "TaggedConceptDataset: %d images (x%d repeats) from %s",
+            len(find_images(self.data_dir)),
+            repeats,
+            self.data_dir,
         )
+
+    def _read_caption(self, image_path: Path) -> str:
+        for cand in _candidate_caption_paths(
+            image_path,
+            self.c_lora_config.caption_extensions,
+        ):
+            if cand.exists():
+                return cand.read_text(encoding="utf-8").strip()
+
+        meta_caption = self.metadata_map.get(image_path.name, "").strip()
+        if meta_caption:
+            return meta_caption
+
+        # fallback: token only
+        return ""
 
     def __len__(self) -> int:
         return len(self.image_paths)
@@ -188,9 +269,26 @@ class DreamBoothDataset(Dataset):
         image = Image.open(image_path).convert("RGB")
         pixel_values = self.transform(image)
 
+        raw_caption = self._read_caption(image_path)
+        prompt = build_image_caption_prompt(
+            self.task,
+            raw_caption=raw_caption,
+            cfg=self.c_lora_config,
+        )
+
+        input_ids = self.tokenizer(
+            prompt,
+            truncation=True,
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            return_tensors="pt",
+        ).input_ids.squeeze(0)
+
         return {
             "pixel_values": pixel_values,
-            "input_ids": self.input_ids.clone(),
+            "input_ids": input_ids,
+            "prompt": prompt,
+            "image_path": str(image_path),
         }
 
 
@@ -264,8 +362,12 @@ class PriorPreservationDataset(Dataset):
         }
 
 
-def collate_dreambooth(batch: List[dict]) -> dict:
-    """Custom collate function for DreamBooth batches."""
+def collate_examples(batch: List[dict]) -> dict:
     pixel_values = torch.stack([b["pixel_values"] for b in batch])
     input_ids = torch.stack([b["input_ids"] for b in batch])
-    return {"pixel_values": pixel_values, "input_ids": input_ids}
+    output = {"pixel_values": pixel_values, "input_ids": input_ids}
+    if "prompt" in batch[0]:
+        output["prompts"] = [b["prompt"] for b in batch]
+    if "image_path" in batch[0]:
+        output["image_paths"] = [b["image_path"] for b in batch]
+    return output

@@ -63,7 +63,8 @@ class TaskConfig:
     name: str = ""
     trigger_token: str = ""
     instance_prompt: str = ""
-    class_prompt: str = "a photo of anime girl"
+    eval_prompt: str = ""
+    class_prompt: str = "a photo of anime character"
     data_dir: str = ""
     ref_dir: str = ""
 
@@ -90,52 +91,48 @@ class EvaluationConfig:
 
 @dataclass
 class CLoRAConfig:
-    """Configuration for faithful C-LoRA and legacy scaffold methods.
-
-    The faithful_c_lora method uses a shared continual model with per-task
-    adapters composed into a single effective delta. Task identity comes from
-    personalized token embeddings, not adapter selection. Occupancy-based
-    regularization prevents new adapters from interfering with past ones.
-
-    Legacy scaffold fields (importance_method, importance_decay, regularize_layers)
-    are retained for backward compatibility with c_lora_scaffold.
-    """
-
     # --- Token ---
-    token_init: str = "random"              # "random" | "fixed"
+    token_init: str = "random"
     train_token_embeddings: bool = True
 
-    # --- Prompt ---
-    prompt_mode: str = "clora"              # "clora" (no class word) | "dreambooth"
+    # --- Prompt / caption ---
+    prompt_mode: str = "clora"  # keep for compatibility/logging
+    use_image_captions: bool = True
+    caption_extensions: List[str] = field(
+        default_factory=lambda: [".txt", ".caption", ".tags"]
+    )
+    caption_prefix_template: str = "a portrait of <{trigger_token}>"
+    caption_suffix_template: str = ""
+    strip_trigger_from_tags: bool = True
+    strip_task_name_from_tags: bool = True
+    lowercase_tags: bool = True
+    shuffle_tags: bool = False
+    max_caption_tags: Optional[int] = 48
 
     # --- Adapter ---
-    adapter_strategy: str = "per_task"      # "per_task" | "rolling"
+    adapter_strategy: str = "per_task"
 
     # --- Regularization ---
-    regularizer_type: str = "occupancy"     # "occupancy" | "l2" | "none"
+    regularizer_type: str = "occupancy"
     regularization_weight: float = 0.1
 
-    # --- Prior preservation (default ON for faithful mode) ---
-    prior_preservation: bool = True
+    # --- Prior preservation ---
+    prior_preservation: bool = False   # set False if you want pure PEFT, no DreamBooth-like prior
     prior_loss_weight: float = 1.0
     num_class_images: int = 200
     class_prompt: str = "a photo of anime character"
 
     # --- Inference ---
-    # "compose_all" = shared continual model (PRIMARY eval)
-    # "per_task" = isolated adapter loading (DIAGNOSTIC only)
-    inference_adapter_mode: str = "compose_all"
+    inference_adapter_mode: str = "merged_online"
 
-    # --- Diagnostic evaluation ---
-    run_diagnostic_eval: bool = False       # optional isolated-adapter eval
-    run_multi_concept_probe: bool = True    # multi-concept generation probe
+    # --- Diagnostic ---
+    run_diagnostic_eval: bool = False
+    run_multi_concept_probe: bool = True
 
-    # --- Legacy scaffold fields (for c_lora_scaffold backward compat) ---
-    importance_method: str = "magnitude"    # "none" | "magnitude" | "fisher_diag"
+    # --- Legacy scaffold ---
+    importance_method: str = "magnitude"
     importance_decay: float = 0.9
-    regularize_layers: List[str] = field(
-        default_factory=lambda: ["to_k", "to_v"]
-    )
+    regularize_layers: List[str] = field(default_factory=lambda: ["to_k", "to_v"])
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +212,8 @@ def load_config(path: str) -> PipelineConfig:
             raise ValueError(f"Task {i} is missing 'name'")
         if not task.trigger_token:
             raise ValueError(f"Task '{task.name}' is missing 'trigger_token'")
-        if not task.instance_prompt:
-            raise ValueError(f"Task '{task.name}' is missing 'instance_prompt'")
+        if not task.eval_prompt and not task.instance_prompt:
+            task.eval_prompt = f"a portrait of <{task.trigger_token}>"
         if not task.data_dir:
             raise ValueError(f"Task '{task.name}' is missing 'data_dir'")
         if not task.ref_dir:
@@ -244,14 +241,7 @@ def load_config(path: str) -> PipelineConfig:
 
     # Method-specific validation
     if experiment.method == "faithful_c_lora":
-        if c_lora.adapter_strategy != "per_task":
-            raise ValueError(
-                "faithful_c_lora requires adapter_strategy='per_task', "
-                f"got '{c_lora.adapter_strategy}'"
-            )
-        # Default target modules to cross-attention K/V only
-        if model.lora_target_modules == ["to_k", "to_v"]:
-            model.lora_target_modules = ["attn2.to_k", "attn2.to_v"]
+        model.lora_target_modules = ["attn2.to_k", "attn2.to_v"]
 
     config = PipelineConfig(
         experiment=experiment,

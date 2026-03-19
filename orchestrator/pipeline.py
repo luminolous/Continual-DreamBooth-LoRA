@@ -29,7 +29,7 @@ import torch
 from config.schema import PipelineConfig
 from data.dataset import (
     PriorPreservationDataset,
-    build_task_prompt,
+    build_eval_prompt,
     validate_task_data,
 )
 from eval.generator import generate_eval_images
@@ -131,9 +131,10 @@ class ContinualPipeline:
             "lora_alpha": config.model.lora_alpha,
             "lora_target_modules": config.model.lora_target_modules,
             "num_tasks_completed": 0,
-            "composition_policy": "compose_all",
+            "composition_policy": "merged_online",
+            "adapter_snapshot": None,
+            "merged_unet_snapshot": "faithful_state/merged_unet",
             "tokenizer_snapshot": "faithful_state/tokenizer",
-            "adapter_snapshot": "faithful_state/adapters",
             "token_embedding_snapshot": "faithful_state/all_token_embeddings.pt",
             "tasks": [],
         }
@@ -215,8 +216,13 @@ class ContinualPipeline:
             self.method.setup_adapters(t, self.trainer, self.config)
 
             # 3. Build prompt for this task
-            prompt = build_task_prompt(task, c_lora_cfg.prompt_mode)
-            logger.info("Training prompt: '%s'", prompt)
+            eval_prompt = build_eval_prompt(task)
+            logger.info("Eval base prompt: '%s'", eval_prompt)
+            logger.info(
+                "Training caption mode: per-image tags (prefix='%s', suffix='%s')",
+                c_lora_cfg.caption_prefix_template,
+                c_lora_cfg.caption_suffix_template,
+            )
 
             # 4. Get regularization loss function
             extra_loss_fn = self.method.get_extra_loss_fn()
@@ -235,19 +241,30 @@ class ContinualPipeline:
                 self.checkpoints_dir / f"task_{t:02d}_{task.name}"
             )
             token_ids_to_save = [token_id] if token_id is not None else None
+            adapter_name = f"task_{t}"
 
-            self.trainer.train(
+            ckpt_dir = self.trainer.train(
                 task=task,
                 output_dir=task_output_dir,
                 extra_loss_fn=extra_loss_fn,
-                prompt_override=prompt,
                 prior_dataset=prior_dataset,
                 prior_loss_weight=c_lora_cfg.prior_loss_weight,
                 token_ids_to_save=token_ids_to_save,
+                selected_adapter_name=adapter_name,
+                c_lora_config=c_lora_cfg,
             )
 
             # 7. Post-task: archive factors, update occupancy, clear hooks
             self.method.post_task_cleanup(t, self.trainer)
+
+            # merge newly trained adapter into backbone
+            self.trainer.merge_active_adapter_into_backbone(adapter_name)
+
+            # save regularizer/method state
+            method_state_path = self.base_output / "faithful_state" / "regularizer_state.pt"
+            torch.save(self.method.export_state(), method_state_path)
+            logger.info("Saved method regularizer state to %s", method_state_path)
+
             self.trainer.clear_token_embedding_hooks()
 
             # 8. Save task metadata (strengthened for restore)
@@ -259,7 +276,7 @@ class ContinualPipeline:
                 "token": f"<{task.trigger_token}>",
                 "token_id": token_id,
                 "prompt_mode": c_lora_cfg.prompt_mode,
-                "instance_prompt": prompt,
+                "eval_prompt": eval_prompt,
                 "class_prompt": c_lora_cfg.class_prompt,
                 "regularizer_type": c_lora_cfg.regularizer_type,
                 "regularization_weight": c_lora_cfg.regularization_weight,
@@ -285,9 +302,7 @@ class ContinualPipeline:
                 "PRIMARY EVAL: composed model after task %d (adapters: %s)",
                 t, self.trainer.get_all_adapter_names(),
             )
-            pipe = self.trainer.build_inference_pipeline(
-                adapter_names=self.trainer.get_all_adapter_names(),
-            )
+            pipe = self.trainer.build_inference_pipeline()
             self._evaluate_stage(t, pipe)
 
             del pipe
@@ -332,7 +347,7 @@ class ContinualPipeline:
                 token_embedding_path=emb_path if Path(emb_path).exists() else None,
             )
 
-            prompt = build_task_prompt(task, self.config.c_lora.prompt_mode)
+            prompt = build_eval_prompt(task, self.config.c_lora.prompt_mode)
             eval_output_dir = str(
                 self.eval_dir / f"diagnostic" / f"task_{j:02d}_{task.name}"
             )
@@ -532,13 +547,28 @@ class ContinualPipeline:
             extra_loss_fn = self.method.get_extra_loss_fn()
 
             task_output_dir = str(self.checkpoints_dir / f"task_{t:02d}_{task.name}")
-            prev_checkpoint = self.trainer.train(
+            adapter_name = f"task_{t}"
+
+            ckpt_dir = self.trainer.train(
                 task=task,
-                output_dir=task_output_dir,
-                extra_loss_fn=extra_loss_fn,
+                output_dir=str(task_output_dir),
+                extra_loss_fn=self.method.get_extra_loss_fn(),
+                prior_dataset=prior_dataset,
+                prior_loss_weight=c_lora_cfg.prior_loss_weight,
+                token_ids_to_save=[token_id],
+                selected_adapter_name=adapter_name,
+                c_lora_config=c_lora_cfg,
             )
 
             self.method.post_task_cleanup(t, self.trainer)
+
+            # merge newly trained adapter into backbone
+            self.trainer.merge_active_adapter_into_backbone(adapter_name)
+
+            # save regularizer/method state
+            method_state_path = self.base_output / "faithful_state" / "regularizer_state.pt"
+            torch.save(self.method.export_state(), method_state_path)
+            logger.info("Saved method regularizer state to %s", method_state_path)
 
             logger.info("Evaluating tasks 0..%d after training task %d", t, t)
             pipe = self.trainer.build_inference_pipeline(lora_dir=prev_checkpoint)
@@ -640,16 +670,12 @@ class ContinualPipeline:
         # Restore faithful state
         self.trainer.restore_faithful_state(experiment_dir)
 
-        # PRIMARY EVAL: composed model with all adapters active
-        final_stage = num_completed - 1
-        logger.info(
-            "PRIMARY EVAL (composed model): evaluating %d tasks at stage %d",
-            num_completed, final_stage,
-        )
+        method_state_path = Path(experiment_dir) / "faithful_state" / "regularizer_state.pt"
+        if method_state_path.exists() and hasattr(self.method, "load_state"):
+            self.method.load_state(torch.load(method_state_path, map_location="cpu"))
 
-        pipe = self.trainer.build_inference_pipeline(
-            adapter_names=self.trainer.get_all_adapter_names(),
-        )
+        final_stage = num_completed - 1
+        pipe = self.trainer.build_inference_pipeline()
         self._evaluate_stage(final_stage, pipe)
 
         del pipe
@@ -700,32 +726,9 @@ class ContinualPipeline:
         # Restore state from checkpoint
         self.trainer.restore_faithful_state(str(self.base_output))
 
-        # Rebuild occupancy masks from saved adapters (for regularization)
-        from methods.faithful_c_lora import FaithfulCLoRA
-        if isinstance(self.method, FaithfulCLoRA):
-            for t in range(num_completed):
-                adapter_name = f"task_{t}"
-                factors = self.trainer.get_adapter_lora_factors(adapter_name)
-                self.method._past_factors.append(factors)
-                # Update occupancy masks
-                for module_key, (a_mat, b_mat) in factors.items():
-                    delta = torch.matmul(b_mat, a_mat)
-                    abs_delta = delta.abs()
-                    if module_key in self.method._occupancy:
-                        self.method._occupancy[module_key] += abs_delta
-                    else:
-                        self.method._occupancy[module_key] = abs_delta
-                # Normalize
-                for module_key in self.method._occupancy:
-                    occ = self.method._occupancy[module_key]
-                    max_val = occ.max()
-                    if max_val > 0:
-                        self.method._occupancy[module_key] = occ / max_val
-
-            logger.info(
-                "Rebuilt occupancy from %d completed adapters (%d modules)",
-                num_completed, len(self.method._occupancy),
-            )
+        method_state_path = self.base_output / "faithful_state" / "regularizer_state.pt"
+        if method_state_path.exists() and hasattr(self.method, "load_state"):
+            self.method.load_state(torch.load(method_state_path, map_location="cpu"))
 
         # Load previous scores
         scores_path = self.base_output / "scores_intermediate.json"
@@ -757,7 +760,7 @@ class ContinualPipeline:
             self.method.pre_task_setup(t, self.trainer, self.config)
             self.method.setup_adapters(t, self.trainer, self.config)
 
-            prompt = build_task_prompt(task, c_lora_cfg.prompt_mode)
+            prompt = build_eval_prompt(task, c_lora_cfg.prompt_mode)
             extra_loss_fn = self.method.get_extra_loss_fn()
 
             token_id = self.trainer._task_token_ids.get(f"<{task.trigger_token}>")

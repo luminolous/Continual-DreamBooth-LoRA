@@ -4,19 +4,18 @@ Evaluation image generation from LoRA-loaded Stable Diffusion pipeline.
 Generates images for each evaluation prompt template, expanding variables
 like {instance_prompt} or {trigger_token} per character, and saves them
 to the output directory.
-
-Supports both DreamBooth-style prompts and C-LoRA-style prompts (no class word).
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import torch
 
 from config.schema import EvaluationConfig, TaskConfig
+from data.dataset import build_eval_prompt
 from utils.io import ensure_dir
 
 logger = logging.getLogger(__name__)
@@ -28,7 +27,6 @@ def generate_eval_images(
     eval_config: EvaluationConfig,
     output_dir: str,
     seed: int = 42,
-    prompt_mode: Optional[str] = None,
 ) -> List[Path]:
     """Generate evaluation images for a single character task.
 
@@ -38,7 +36,6 @@ def generate_eval_images(
         eval_config: Evaluation settings (num images, guidance, etc.).
         output_dir: Directory to save generated images.
         seed: Random seed for reproducibility.
-        prompt_mode: "clora" or "dreambooth" or None (default=dreambooth behavior).
 
     Returns:
         List of paths to generated images.
@@ -50,22 +47,15 @@ def generate_eval_images(
     pipeline.set_progress_bar_config(disable=True)
 
     for prompt_idx, prompt_template in enumerate(eval_config.prompts_per_character):
-        # Expand template variables based on prompt mode
-        if prompt_mode == "clora":
-            # C-LoRA mode: use trigger_token wrapped in angle brackets, no class word
-            clora_prompt = f"<{task.trigger_token}>"
-            prompt = prompt_template.format(
-                instance_prompt=clora_prompt,
-                trigger_token=task.trigger_token,
-                name=task.name,
-            )
-        else:
-            # DreamBooth mode: use full instance_prompt (with class word)
-            prompt = prompt_template.format(
-                instance_prompt=task.instance_prompt,
-                trigger_token=task.trigger_token,
-                name=task.name,
-            )
+        base_eval_prompt = build_eval_prompt(task)
+        trigger_token = f"<{task.trigger_token}>"
+
+        prompt = prompt_template.format(
+            instance_prompt=base_eval_prompt,
+            trigger_token=trigger_token,
+            trigger_token_plain=task.trigger_token,
+            name=task.name,
+        )
 
         logger.info(
             "Generating %d images for prompt %d/%d: '%s'",
