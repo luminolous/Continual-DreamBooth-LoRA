@@ -92,7 +92,7 @@ def validate_task_data(task: TaskConfig, min_images: int = 1) -> None:
 # Prompt building
 # ---------------------------------------------------------------------------
 
-def build_eval_prompt(task: TaskConfig) -> str:
+def build_eval_prompt(task: TaskConfig, prompt_mode: Optional[str] = None) -> str:
     return task.eval_prompt or task.instance_prompt or f"a portrait of <{task.trigger_token}>"
 
 # ---------------------------------------------------------------------------

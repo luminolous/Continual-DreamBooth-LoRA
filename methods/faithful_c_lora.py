@@ -252,16 +252,16 @@ class FaithfulCLoRA(BaseMethod):
             len(self._past_factors),
         )
 
-def export_state(self) -> dict:
-    return {
-        "past_factors": self._past_factors,
-        "occupancy": self._occupancy,
-        "current_adapter": self._current_adapter,
-        "active": self._active,
-    }
+    def export_state(self) -> dict:
+        return {
+            "past_factors": self._past_factors,
+            "occupancy": self._occupancy,
+            "current_adapter": self._current_adapter,
+            "active": self._active,
+        }
 
-def load_state(self, state: dict) -> None:
-    self._past_factors = state.get("past_factors", [])
-    self._occupancy = state.get("occupancy", {})
-    self._current_adapter = state.get("current_adapter")
-    self._active = state.get("active", False)
+    def load_state(self, state: dict) -> None:
+        self._past_factors = state.get("past_factors", [])
+        self._occupancy = state.get("occupancy", {})
+        self._current_adapter = state.get("current_adapter")
+        self._active = state.get("active", False)

@@ -261,7 +261,8 @@ class ContinualPipeline:
             self.trainer.merge_active_adapter_into_backbone(adapter_name)
 
             # save regularizer/method state
-            method_state_path = self.base_output / "faithful_state" / "regularizer_state.pt"
+            faithful_state_dir = ensure_dir(self.base_output / "faithful_state")
+            method_state_path = faithful_state_dir / "regularizer_state.pt"
             torch.save(self.method.export_state(), method_state_path)
             logger.info("Saved method regularizer state to %s", method_state_path)
 
@@ -511,6 +512,7 @@ class ContinualPipeline:
         """Run the legacy pipeline (naive_sequential / c_lora_scaffold)."""
         tasks = self.config.tasks
         num_tasks = len(tasks)
+        c_lora_cfg = self.config.c_lora
 
         logger.info("=" * 60)
         logger.info("CONTINUAL DREAMBOOTH-CLORA PIPELINE (LEGACY)")
@@ -525,6 +527,20 @@ class ContinualPipeline:
         self.trainer.load_models()
 
         prev_checkpoint = None
+        prior_dataset = None
+
+        if c_lora_cfg.prior_preservation:
+            class_images_dir = self.trainer.generate_class_prior_images(
+                class_prompt=c_lora_cfg.class_prompt,
+                num_images=c_lora_cfg.num_class_images,
+                output_dir=str(self.base_output / "class_prior"),
+            )
+            prior_dataset = PriorPreservationDataset(
+                class_images_dir=class_images_dir,
+                class_prompt=c_lora_cfg.class_prompt,
+                tokenizer=self.trainer.tokenizer,
+                size=512,
+            )
 
         for t, task in enumerate(tasks):
             stage_start = time.time()
@@ -537,9 +553,11 @@ class ContinualPipeline:
             self.trainer.inject_lora(prev_checkpoint=prev_checkpoint)
 
             # Fisher hooks for scaffold
-            if (self.config.experiment.method == "c_lora_scaffold"
-                    and self.config.c_lora.importance_method == "fisher_diag"
-                    and t > 0):
+            if (
+                self.config.experiment.method == "c_lora_scaffold"
+                and self.config.c_lora.importance_method == "fisher_diag"
+                and t > 0
+            ):
                 from methods.c_lora_scaffold import CLoRAScaffold
                 if isinstance(self.method, CLoRAScaffold):
                     self.method.setup_fisher_hooks(self.trainer)
@@ -547,31 +565,23 @@ class ContinualPipeline:
             extra_loss_fn = self.method.get_extra_loss_fn()
 
             task_output_dir = str(self.checkpoints_dir / f"task_{t:02d}_{task.name}")
-            adapter_name = f"task_{t}"
 
             ckpt_dir = self.trainer.train(
                 task=task,
-                output_dir=str(task_output_dir),
-                extra_loss_fn=self.method.get_extra_loss_fn(),
+                output_dir=task_output_dir,
+                extra_loss_fn=extra_loss_fn,
                 prior_dataset=prior_dataset,
                 prior_loss_weight=c_lora_cfg.prior_loss_weight,
-                token_ids_to_save=[token_id],
-                selected_adapter_name=adapter_name,
                 c_lora_config=c_lora_cfg,
             )
 
             self.method.post_task_cleanup(t, self.trainer)
 
-            # merge newly trained adapter into backbone
-            self.trainer.merge_active_adapter_into_backbone(adapter_name)
-
-            # save regularizer/method state
-            method_state_path = self.base_output / "faithful_state" / "regularizer_state.pt"
-            torch.save(self.method.export_state(), method_state_path)
-            logger.info("Saved method regularizer state to %s", method_state_path)
+            # checkpoint saat ini menjadi dasar task berikutnya
+            prev_checkpoint = ckpt_dir
 
             logger.info("Evaluating tasks 0..%d after training task %d", t, t)
-            pipe = self.trainer.build_inference_pipeline(lora_dir=prev_checkpoint)
+            pipe = self.trainer.build_inference_pipeline(lora_dir=ckpt_dir)
             self._evaluate_stage(t, pipe)
 
             del pipe
@@ -772,10 +782,11 @@ class ContinualPipeline:
                 task=task,
                 output_dir=task_output_dir,
                 extra_loss_fn=extra_loss_fn,
-                prompt_override=prompt,
                 prior_dataset=prior_dataset,
                 prior_loss_weight=c_lora_cfg.prior_loss_weight,
                 token_ids_to_save=[token_id] if token_id else None,
+                selected_adapter_name=f"task_{t}",
+                c_lora_config=c_lora_cfg,
             )
 
             self.method.post_task_cleanup(t, self.trainer)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import torch
 
@@ -27,6 +27,7 @@ def generate_eval_images(
     eval_config: EvaluationConfig,
     output_dir: str,
     seed: int = 42,
+    prompt_mode: Optional[str] = None,
 ) -> List[Path]:
     """Generate evaluation images for a single character task.
 
@@ -47,7 +48,7 @@ def generate_eval_images(
     pipeline.set_progress_bar_config(disable=True)
 
     for prompt_idx, prompt_template in enumerate(eval_config.prompts_per_character):
-        base_eval_prompt = build_eval_prompt(task)
+        base_eval_prompt = build_eval_prompt(task, prompt_mode=prompt_mode)
         trigger_token = f"<{task.trigger_token}>"
 
         prompt = prompt_template.format(

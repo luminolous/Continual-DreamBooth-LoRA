@@ -38,29 +38,6 @@ from utils.io import ensure_dir, save_lora_weights, save_token_embeddings
 
 logger = logging.getLogger(__name__)
 
-
-def merge_active_adapter_into_backbone(self, adapter_name: str) -> None:
-    from peft import PeftModel
-
-    if not isinstance(self.unet, PeftModel):
-        logger.warning("UNet is not a PeftModel, skipping merge")
-        return
-
-    logger.info("Merging adapter '%s' into backbone UNet", adapter_name)
-
-    try:
-        self.unet.set_adapter(adapter_name)
-    except Exception:
-        pass
-
-    merged_unet = self.unet.merge_and_unload()
-    self.unet = merged_unet.to(self._device, dtype=self._weight_dtype)
-
-    self._adapter_names = []
-    self._lora_injected = False
-
-    logger.info("Adapter '%s' merged and unloaded; trainer now holds merged backbone", adapter_name)
-
 class DreamBoothLoRATrainer:
     """Encapsulates DreamBooth-LoRA training for continual learning.
 
@@ -97,6 +74,28 @@ class DreamBoothLoRATrainer:
         # FIX 1: Track gradient hook handles so they can be removed between tasks.
         # This prevents hook accumulation across tasks.
         self._embedding_hook_handle: Optional[torch.utils.hooks.RemovableHook] = None
+
+    def merge_active_adapter_into_backbone(self, adapter_name: str) -> None:
+        from peft import PeftModel
+
+        if not isinstance(self.unet, PeftModel):
+            logger.warning("UNet is not a PeftModel, skipping merge")
+            return
+
+        logger.info("Merging adapter '%s' into backbone UNet", adapter_name)
+
+        try:
+            self.unet.set_adapter(adapter_name)
+        except Exception:
+            pass
+
+        merged_unet = self.unet.merge_and_unload()
+        self.unet = merged_unet.to(self._device, dtype=self._weight_dtype)
+
+        self._adapter_names = []
+        self._lora_injected = False
+
+        logger.info("Adapter '%s' merged and unloaded; trainer now holds merged backbone", adapter_name)
 
     def _get_weight_dtype(self) -> torch.dtype:
         """Determine weight dtype from mixed_precision setting."""
@@ -758,6 +757,8 @@ class DreamBoothLoRATrainer:
         else:
             optimizer = torch.optim.AdamW(trainable_params, lr=tc.learning_rate)
 
+        optimizer.zero_grad(set_to_none=True)
+
         # Training loop
         self.unet.train()
         global_step = 0
@@ -862,14 +863,16 @@ class DreamBoothLoRATrainer:
                 loss = loss + reg_loss
 
             # Backward + optimize
+            display_loss = loss.detach().item()
+            loss = loss / max(tc.gradient_accumulation_steps, 1)
             loss.backward()
 
-            if (step + 1) % tc.gradient_accumulation_steps == 0:
+            if ((step + 1) % tc.gradient_accumulation_steps == 0) or (step == tc.max_train_steps - 1):
                 optimizer.step()
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
 
             global_step += 1
-            progress.set_postfix({"loss": f"{loss.item():.4f}"})
+            progress.set_postfix({"loss": f"{display_loss:.4f}"})
 
         progress.close()
         logger.info(
@@ -901,10 +904,12 @@ class DreamBoothLoRATrainer:
         self,
         token_embeddings_dir: Optional[str] = None,
         lora_dir: Optional[str] = None,
+        adapter_names: Optional[List[str]] = None,
     ):
         from diffusers import StableDiffusionPipeline
+        from peft import PeftModel
 
-        # faithful merged-online mode: use in-memory merged UNet directly
+        # faithful merged-online mode: use in-memory UNet directly
         if lora_dir is None:
             pipe = StableDiffusionPipeline.from_pretrained(
                 self.model_config.pretrained_model_name,
@@ -916,6 +921,13 @@ class DreamBoothLoRATrainer:
                 requires_safety_checker=False,
             )
             pipe = pipe.to(self._device)
+
+            if adapter_names and isinstance(self.unet, PeftModel):
+                try:
+                    self.unet.set_adapter(adapter_names if len(adapter_names) > 1 else adapter_names[0])
+                except Exception as e:
+                    logger.warning("Could not set adapter(s) %s: %s", adapter_names, e)
+
         else:
             pipe = StableDiffusionPipeline.from_pretrained(
                 self.model_config.pretrained_model_name,
@@ -927,6 +939,16 @@ class DreamBoothLoRATrainer:
 
             from utils.io import load_lora_weights_into_pipeline
             load_lora_weights_into_pipeline(pipe, lora_dir)
+
+            if adapter_names and isinstance(pipe.unet, PeftModel):
+                try:
+                    pipe.unet.set_adapter(adapter_names if len(adapter_names) > 1 else adapter_names[0])
+                except Exception as e:
+                    logger.warning("Could not set adapter(s) %s on pipeline: %s", adapter_names, e)
+
+        if token_embeddings_dir:
+            from utils.io import load_token_embeddings
+            load_token_embeddings(pipe.text_encoder, pipe.tokenizer, token_embeddings_dir)
 
         if self.model_config.enable_xformers_memory_efficient_attention:
             try:
